@@ -368,8 +368,23 @@ run it; the report below is from a community machine: an RX 6900 XT 16 GB (gfx10
   matrix cores; `hip_prefill_hipblaslt_gemm`, no hipBLASLt table) and 3 that fail for reasons outside the engine
   (`ple_parity` needs a Q2_0 PLE file that is not on that machine, `expert_multi_test` refuses the CPU without AVX-512,
   `platform_memory_test` cannot `mlock` at the shell's default `ulimit -l`).
-- **gfx1031** (RX 6700 XT, #524): setup knows it (the `gfx103X-all` wheels, unvalidated); its reporter runs it daily
-  on one card.
+- **gfx1031** (RX 6700 XT, #524): setup knows it; its reporter runs it daily on one card. Setup's own gfx1031
+  install/build path remains unvalidated. On 2026-10-06, a local ROCm 7.14 `gfx103X-all` container build ran natively
+  (no `HSA_OVERRIDE_GFX_VERSION`): HIPBLAS passed, Strata identified the card as gfx1031, loaded the
+  Qwen3.8-Flash-Next GSQ-RCO IQ2_XS model and answered a prompt. One calibrated run
+  (`--spec 4 --spec-min-p 0.70 --pcie-frac 0.00`) read a 4,022-token prompt at 466.9 tok/s and generated 113 tokens
+  at 38.7 tok/s. This is a single run, not a controlled comparison with gfx1030.
+
+  **Slow-request incident (2026-10-06):** The reporter says the slowdown began right after Pi's auto-compact of a
+  long conversation. After that slowdown, restarting the Strata container and Pi did not
+  restore the earlier rate. Fresh Pi requests logged 9.4-14.7 output tok/s; one 5,497-token prompt took about 30 s
+  to read. During a request, `rocm-smi` reported 99% GPU use, 2,635 MHz shader clock, 57 C edge / 65 C junction /
+  70 C memory temperatures, and 12.67 of 12.87 GB VRAM used. Host memory showed 18 GiB available and 3 GiB swap
+  occupied; the latest one-second `vmstat` sample showed no active swap I/O. These snapshots do not show thermal throttling or
+  active swapping, and do not establish the cause of the slowdown. After a full host reboot the rate recovered: Pi
+  requests with 6,622 to 13,407-token prompts decoded at 46-54 tok/s, and the 13,407-token prompt was read in about
+  21 s (the earlier part of the conversation was cached, so this is not a pure prefill rate). The cause of the
+  slowdown is still unknown; the reboot cleared it, which does not say what it was.
 - **Not validated:** gfx1032 (the same `dp4a` path, no hardware report), setup's own build path and the
   `gfx103X-all` wheels on gfx1030, images, answer-quality benchmarks. RDNA1 (gfx1012, RX 5500 XT) builds by hand:
   [OLDER_GPUS.md](OLDER_GPUS.md#amd-building-gfx906-and-gfx1012).
