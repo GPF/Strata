@@ -193,6 +193,37 @@ line when it is ready; the engine log is `strata-<model>.log` in the Strata fold
 More: [TROUBLESHOOTING.md](TROUBLESHOOTING.md) and the [full table](DETAILS.md#troubleshooting). If it still fails,
 collect `strata-<model>.log` and the setup output, and suggest an issue at https://github.com/Niko1221/Strata/issues.
 
+## 10. Optional: tune the engine for this PC
+
+Only when the user asks, or when the speed is clearly below what [DETAILS.md](DETAILS.md#double-click-start-herebat)
+reports for a similar card. Close the server first: the tuning starts its own engine, which needs the GPU and the RAM
+the server holds.
+
+```
+Linux:    ./setup.sh --calibrate --no-start --yes     (save the output: | tee calibrate.txt)
+Windows:  START-HERE.bat --calibrate --no-start --yes
+```
+
+Setup says it takes about 5-10 minutes and keeps the PC busy. What to know:
+- **What it measures:** the output speed (decode only, three short prompts, 128 tokens, thinking off) with
+  `--pcie-frac`, `--spec-min-p` and `--pool-workers`. It starts from the engine's own defaults, not from the values
+  already in the config, and keeps a value only when it is more than 3% faster. Prompt reading is not affected by
+  these three settings, and the speed is measured at a short context, so a long-context workflow can differ.
+- **Where the result goes:** into the `args` of `strata-<model>.json`, and into the settings file
+  (`~/.config/strata/settings.json`; `%APPDATA%\Strata\settings.json` on Windows), keyed by the GPU and its VRAM, the
+  CPU, the RAM, the model, its context and whether images are on. A later setup that writes a new config for the same
+  key applies the saved result again (Linux, including AMD; Windows AMD keeps the defaults). A different context or
+  amount of RAM is a different key.
+- **In Docker the settings file is lost with the container.** It sits in the container's home
+  (`/root/.config/strata/`), so only the config on the `/data/config` volume survives a recreated container. Run the
+  tuning with `/data/config` mounted, or copy the printed picks into the config; a run in a throw-away container
+  keeps nothing.
+- **AMD:** setup does not offer the tuning after an install (NVIDIA only), and [INSTALL.md](INSTALL.md) lists
+  `--calibrate` as NVIDIA-only. The command runs on Linux with an AMD card (setup.py `hardware_key`, #566), but treat
+  its AMD result as unvalidated and keep the printed sweep.
+- It prints the sweep (tok/s per PCIe share and draft floor) only to the terminal. Save it: without it you cannot tell
+  a value that won from a value that was already the default.
+
 ## Alternative: the MCP server
 
 Strata also has an MCP server, so an AI tool can check, install, start and stop Strata through tool calls

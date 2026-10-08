@@ -369,11 +369,28 @@ run it; the report below is from a community machine: an RX 6900 XT 16 GB (gfx10
   (`ple_parity` needs a Q2_0 PLE file that is not on that machine, `expert_multi_test` refuses the CPU without AVX-512,
   `platform_memory_test` cannot `mlock` at the shell's default `ulimit -l`).
 - **gfx1031** (RX 6700 XT, #524): setup knows it; its reporter runs it daily on one card. Setup's own gfx1031
-  install/build path remains unvalidated. On 2026-10-06, a local ROCm 7.14 `gfx103X-all` container build ran natively
-  (no `HSA_OVERRIDE_GFX_VERSION`): HIPBLAS passed, Strata identified the card as gfx1031, loaded the
-  Qwen3.8-Flash-Next GSQ-RCO IQ2_XS model and answered a prompt. One calibrated run
+  install/build path remains unvalidated. On 2026-10-06, a local container ran natively (no
+  `HSA_OVERRIDE_GFX_VERSION`) on the `gfx103X-all` ROCm 7.14.0a20260612 wheels: HIPBLAS passed, Strata identified the
+  card as gfx1031, loaded the Qwen3.8-Flash-Next GSQ-RCO IQ2_XS model and answered a prompt. One calibrated run
   (`--spec 4 --spec-min-p 0.70 --pcie-frac 0.00`) read a 4,022-token prompt at 466.9 tok/s and generated 113 tokens
-  at 38.7 tok/s. This is a single run, not a controlled comparison with gfx1030.
+  at 38.7 tok/s. This is a single run, not a controlled comparison with gfx1030, and this note does not record which
+  of the two builds below it used. Its engine log shows `STRATA_DENSE_MMQ=1` on (`prefill gemm: dense MMQ on`),
+  `STRATA_HIP_PROMPT_F16` unset and `--prefill auto`; see the prefill paragraph below.
+
+  **Two builds of that container.** The first compiled the engine with the base image's ROCm 7.2.4
+  (`rocm/dev-ubuntu-24.04:7.2.4-complete`: its `BUILD.json` lists `/opt/rocm/lib`) and installed the 7.14 wheels
+  when the container started; the running engine loaded `libamdhip64`, `libhsa-runtime64`, `libhipblas`,
+  `libhipblaslt` and `librocblas` from the wheels (`/proc/<pid>/maps`), so the compiler and the runtime were two
+  different ROCm versions. setup.py takes a system ROCm 7 when `/opt/rocm` has one, which is why the compile used it.
+  The second build uses setup.py's own HIP function with `ROCM_PATH` pointing at a folder that does not exist, so it
+  installs the wheels into `.venv`, compiles with them and the engine runs on the same ones. setup.py's pin
+  (`ROCM_VERSION` 7.10.0a20251120) is no longer on the `gfx103X-all` index (pip: "No matching distribution found",
+  checked 2026-10-06; 7.14.0a20260612 downloads), so the build takes the version as an argument. On `ubuntu:24.04`
+  the image is 25.2 GB and has no `/opt/rocm`; on the `rocm/dev` base it is 53.9 GB (built, not started). In both,
+  all 21 ROCm libraries the engine links resolve from the wheels and none is missing. A smoke test of the
+  `ubuntu:24.04` image: loaded in about 140 s; the first request, a 1,602-token prompt, was read in 9.9 s (161.7 tok/s)
+  and 17 tokens were generated at 34.7 tok/s with a correct answer. That is one cold request on one card, not a
+  benchmark.
 
   **Slow-request incident (2026-10-06):** The reporter says the slowdown began right after Pi's auto-compact of a
   long conversation. After that slowdown, restarting the Strata container and Pi did not
@@ -384,7 +401,56 @@ run it; the report below is from a community machine: an RX 6900 XT 16 GB (gfx10
   active swapping, and do not establish the cause of the slowdown. After a full host reboot the rate recovered: Pi
   requests with 6,622 to 13,407-token prompts decoded at 46-54 tok/s, and the 13,407-token prompt was read in about
   21 s (the earlier part of the conversation was cached, so this is not a pure prefill rate). The cause of the
-  slowdown is still unknown; the reboot cleared it, which does not say what it was.
+  slowdown is still unknown; the reboot cleared it, which does not say what it was. The engine log of the slow
+  requests shows fresh prompts of 5,497 and 61,828 tokens read at 183.7 and 189.8 tok/s with decode at 9.2 and
+  15.4 tok/s, with MMQ on; the same setup had read fresh prompts of 3,362 to 44,350 tokens at 459-487 tok/s before it.
+
+  **Compaction summaries (2026-10-06, same machine, `--max-context 131072 --pcie-frac 0.2 --kv-resident 32768
+  --prefill 512`, `STRATA_HIP_PROMPT_F16=1`, MMQ off):**
+  One of Pi's summary requests read a 64,314-token prompt in 346 s (186.1 tok/s), then generated 26,214 tokens in
+  512 s (51.2 tok/s) and ended with `length` at the token cap Pi sent; Pi reported "Summarization failed:
+  generation hit the token cap". The server's progress lines show thinking for the whole generation and no answer.
+  The reporter says a cap raised from 16k to 20k to 26,214 the day before (under a gfx1030 override) kept failing;
+  that is their recollection, not a measurement. The retry read all 98,458 tokens again (the new prompt did not match
+  the cache), about 9 more minutes at roughly 176 tok/s. With `"reasoning_budget_tokens": 16000` and
+  `"reasoning_loop_recovery": "recover"` in the config (both off by default, see [DETAILS.md](DETAILS.md)), the next
+  two summaries finished with `stop`. A manual `/compact` (64,314-token prompt) generated 12,203 tokens in 279 s at
+  43.7 tok/s, about 2,200 of them thinking. An automatic one (39,973-token prompt, 16,384-token cap) printed
+  `repeated reasoning detected at 7168 tokens (coverage=0.255); resuming the same output with the low-effort
+  instruction` and finished at 11,233 tokens in 764 s; the server counted 20.7 tok/s for it, about half the usual
+  rate, and the cost of the recovery was not separated out. That is two summaries, one recovery.
+  Prompt reading ran at 183-190 tok/s and decoding at 36-44 tok/s throughout. From the start of a summary request to
+  the first reply after it took 919 s (630 s for the summary, then 61 s and 228 s for the next two requests, which
+  read the 39,872-token compacted conversation again), about 135 tokens/s counting every token read and generated.
+  One earlier summary request took 1,038 s by the server's clock while the engine's own summary counted 427 s
+  (248 s reading, 179 s generating); the progress lines froze at 28,160 of 45,467 prompt tokens for 622 s. The cause
+  is unknown, and no gap longer than 6 s showed in the prompt reads of the three summary requests since.
+  **Prefill speed: chunk size, MMQ and F16 (2026-10-07, same machine, engine 0.1.40, the `ubuntu:24.04` image with the
+  7.14.0a20260612 wheels for build and run):** the compaction runs above read at 160-195 tok/s. Fresh prompts (nothing
+  reused), read speed in tok/s: `tools/hip/bench_prefill.py` (4,210 and 8,830 tokens, mean of its four fresh requests)
+  and replays of a local agent transcript cut at 35,599 and 90,811 tokens (thinking on, 128 tokens out):
+
+  | Setup | Harness | 35.6k replay | 90.8k replay |
+  | --- | ---: | ---: | ---: |
+  | F16, `--prefill 512` | 178 | 157 | |
+  | MMQ (`STRATA_DENSE_MMQ=1`), `--prefill 512` | 211 | 191 | |
+  | MMQ, `--prefill auto` | 457 | 478 | 458 |
+  | MMQ + `STRATA_HIP_ADAPT_KERNEL_COPY=1`, auto | 465 | 481 | |
+  | F16 (`STRATA_HIP_PROMPT_F16=1`), auto | 512 and 509 (two runs) | 565 and 563 | 547 |
+  | MMQ + F16, auto | 545 | 587 | |
+
+  The chunk size made the largest difference: `auto` chose 8,192-token chunks with a 384-slot ring (engine log), and
+  512-token chunks read at 160-210 tok/s with either switch. Decode did not depend on the switches: 41.7-45.2 tok/s on
+  the harness prompts, 33.5-35.1 tok/s over 128 thinking tokens at 35k-90k. Ten synthetic agent-style prompts (project
+  files from the reporter's own repositories read through a made-up Read tool, 40,307-91,687 tokens, MMQ, auto) read at
+  466-486 tok/s, decode 36-47. Needle recall (`tools/needle_bench.py`, 32k and 125k-token prompts at depths 10, 50 and
+  90, thinking off): 6 of 6 found with MMQ and 6 of 6 with F16, auto. MMQ and F16 both change the rounding (not
+  bit-identical to the default path); needle recall is the only quality check made here. Four hours of one-second
+  samples (7,200, 3,651 of them with the GPU 50% busy or more) show the PCIe link at 16 GT/s x16 throughout, the edge
+  temperature at a median of 81 C and a maximum of 87 C while busy, and the shader clock at a median of 2,575 MHz.
+  Calibration's own sweep run on replay prompts (35.6k, 90.8k and a second session's 35.3k, thinking on):
+  `--spec-min-p 0.7` was fastest in all three and `--pool-workers 7` (the default) fastest or tied; `--pcie-frac` 0.0
+  was fastest in two (by 5-8% over 0.2) and 0.2 in the third (by 8%), so 0.2 stays. One run per setting, on one card.
 - **Not validated:** gfx1032 (the same `dp4a` path, no hardware report), setup's own build path and the
   `gfx103X-all` wheels on gfx1030, images, answer-quality benchmarks. RDNA1 (gfx1012, RX 5500 XT) builds by hand:
   [OLDER_GPUS.md](OLDER_GPUS.md#amd-building-gfx906-and-gfx1012).

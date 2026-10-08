@@ -21,3 +21,6 @@ offers the same steps as tools.
   `tools/test_setup_amd.py`, `tools/test_setup_choices.py`).
 - Keep the docs' style: plain words, measured numbers with what they were measured on, no claims without a
   measurement.
+- Keep local hardware and Docker findings (especially gfx1031/RX 6700 XT results) in this fork's notes unless they
+  generalize beyond Troy's machine. Before proposing upstream docs changes, check that the result is broadly useful
+  and supported; do not assume machine-specific reports belong in an upstream PR.
