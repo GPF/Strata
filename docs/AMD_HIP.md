@@ -425,6 +425,36 @@ run it; the report below is from a community machine: an RX 6900 XT 16 GB (gfx10
   One earlier summary request took 1,038 s by the server's clock while the engine's own summary counted 427 s
   (248 s reading, 179 s generating); the progress lines froze at 28,160 of 45,467 prompt tokens for 622 s. The cause
   is unknown, and no gap longer than 6 s showed in the prompt reads of the three summary requests since.
+  **0.2.2 (engine 0.1.47): the ROCm 10.1.0 source build against the RX 6000 engine package (2026-10-22, same machine,
+  `--max-context 196608`, `--kv int8`, `--prefill auto`, one request at a time):** the source build is
+  `Dockerfile.hip-rocm101` built from `git archive v0.2.2` (ROCm 10.1.0 TheRock tarball for build and run,
+  `STRATA_VISION=cpu`). The package is `strata-engine-0.1.47-linux-x86_64-hip-rx6000` (ROCm 7.13.0a20260515 inside), fetched
+  with `docker/fetch-engines.py` (its FLAVORS list has no RX 6000 entry, so a local copy added `"rocm-gfx103x": ("hip",
+  "rx6000", "hip")`; feed signature, size, SHA-256 and every file hash checked) and built into an image with
+  `docker/build.sh --flavor hip` (`STRATA_BUILD_COMMIT` has to be set when the sources have no `.git`). Fresh prompts of
+  35,541 and 90,304 tokens from a replay of a local agent session (nothing reused), 128 tokens out, greedy, through
+  `/v1/chat/completions`, with the card not in the slow state seen earlier that day (a memory clock stuck at 96 MHz, decode 5-8 tok/s; cleared by a
+  GPU reset; here decode was 32-45 tok/s and no run printed the low-VRAM warning). The source-build rows ran first; the package rows ran after a second `amdgpu_gpu_recover` and a fresh start.
+  Read speed and decode speed in tok/s, then the 200-token answers to a 66-token prompt (two runs):
+
+  | Setup | 35.5k read | 35.5k decode | 90.3k read | 90.3k decode | 200-token answers |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Source build, ROCm 10.1.0 (`--pcie-frac 0.2 --spec-min-p 0.7`, F16 on, CPU share auto) | 579.5 | 36.5 | 575.8 | 41.7 | 36.5, 41.2 |
+  | Package as the launcher sets it up (`--spec-min-p 0.5`, no `--pcie-frac`, neither variable) | 320.0 | 36.0 | 319.1 | 32.2 | 37.0, 43.2 |
+  | Package with `STRATA_SET="pcie_frac=0.2 spec_min_p=0.7 STRATA_HIP_PROMPT_F16=1 STRATA_PREFILL_CPU_SHARE=auto"` | 589.6 | 34.1 | 590.9 | 34.5 | 32.9, 36.6 |
+
+  The launcher's settings read prompts at about 45% lower speed than the same package with the four settings above; the
+  two variables were not tried one at a time, so which of them (or both) accounts for it was not tested, and neither were
+  the two decode settings. The settings reach the engine at launch (checked in its command line and environment) and are
+  not written into `strata-<model>.json`. Other differences between the two images: the source build started from a
+  learned expert profile (`--expert-profile-save`) and had the CPU image encoder loaded (`--vision`); the package used the
+  shipped profile and no vision. Both sized the expert cache alike (4,472 slots, 6.00 GiB on the source build; 4,494,
+  6.03 GiB on the package) and borrowed 4.37 GiB of it for the prompt path. Memory clock during the replays: mean 924-952
+  MHz on the source build, 658-675 MHz on the package. The lowest free VRAM in sysfs during them was 49-54 MiB on the
+  source build, 61-78 MiB on the package as set up and 164-168 MiB on the aligned package. Neither engine printed the low
+  VRAM warning. One machine, one run per row, 128-token answers; the replay is a private session, not
+  `bench/prompts/standard-v1`, so these numbers do not establish more than a comparison of these three configurations on
+  this card.
   **Prefill speed: chunk size, MMQ and F16 (2026-10-07, same machine, engine 0.1.40, the `ubuntu:24.04` image with the
   7.14.0a20260612 wheels for build and run):** the compaction runs above read at 160-195 tok/s. Fresh prompts (nothing
   reused), read speed in tok/s: `tools/hip/bench_prefill.py` (4,210 and 8,830 tokens, mean of its four fresh requests)
